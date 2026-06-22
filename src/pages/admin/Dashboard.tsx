@@ -19,7 +19,11 @@ import {
   Upload,
   Link2,
   ExternalLink,
-  Link
+  Link,
+  Key,
+  Lock,
+  Trophy,
+  Calendar
 } from 'lucide-react';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip
@@ -32,7 +36,7 @@ import { syncElectionStatuses } from '../../lib/electionSync';
 import { createElectionOnChain } from '../../lib/blockchain/blockchainService';
 import { validateNetwork } from '../../lib/blockchain/contract';
 const AdminDashboard = () => {
-  const { user, profile, signOut, linkNotification, dismissLinkNotification } = useAuth();
+  const { user, profile, signOut, linkNotification, dismissLinkNotification, signInWithOtp, verifyOtp } = useAuth();
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedElection, setSelectedElection] = useState<any>(null);
   const [elections, setElections] = useState<any[]>([]);
@@ -49,6 +53,16 @@ const AdminDashboard = () => {
   const [chartData, setChartData] = useState<any[]>([
     { name: '08:00', v: 0 }, { name: '12:00', v: 0 }, { name: '16:00', v: 0 }, { name: '20:00', v: 0 }
   ]);
+
+  // Election Details Modal & OTP State
+  const [detailsModalElection, setDetailsModalElection] = useState<any>(null);
+  const [detailsCandidates, setDetailsCandidates] = useState<any[]>([]);
+  const [otpAction, setOtpAction] = useState<'end' | 'extend' | null>(null);
+  const [showOtpInput, setShowOtpInput] = useState(false);
+  const [otpValue, setOtpValue] = useState('');
+  const [newEndDate, setNewEndDate] = useState('');
+  const [otpError, setOtpError] = useState('');
+  const [otpLoading, setOtpLoading] = useState(false);
 
   // Blockchain audit state
   const [auditRecords, setAuditRecords] = useState<any[]>([]);
@@ -77,6 +91,106 @@ const AdminDashboard = () => {
       }
     }
   }, [selectedElection, activeTab]);
+
+  const handleViewDetails = async (election: any) => {
+    setDetailsModalElection(election);
+    setOtpAction(null);
+    setShowOtpInput(false);
+    setOtpValue('');
+    setOtpError('');
+    setNewEndDate('');
+
+    try {
+      const [
+        { data: candidateData },
+        { data: votesData }
+      ] = await Promise.all([
+        supabase.from('candidates').select('*').eq('election_id', election.id),
+        supabase.from('votes').select('*').eq('election_id', election.id)
+      ]);
+
+      const candidatesWithCounts = (candidateData || []).map(candidate => {
+        const actualVotes = votesData?.filter(v => v.candidate_id === candidate.id).length || 0;
+        return {
+          ...candidate,
+          vote_count: Math.max(candidate.vote_count || 0, actualVotes)
+        };
+      }).sort((a, b) => b.vote_count - a.vote_count);
+
+      setDetailsCandidates(candidatesWithCounts);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleInitiateOtpAction = async (action: 'end' | 'extend') => {
+    if (action === 'extend' && !newEndDate) {
+      setOtpError('Please select a new date and time.');
+      return;
+    }
+    setOtpError('');
+    setOtpLoading(true);
+    try {
+      await signInWithOtp(user!.email!);
+      setOtpAction(action);
+      setShowOtpInput(true);
+    } catch (err: any) {
+      setOtpError(err.message || 'Failed to send OTP.');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleConfirmOtpAction = async () => {
+    if (otpValue.length < 6) {
+      setOtpError('Please enter a valid 6-digit OTP.');
+      return;
+    }
+    setOtpError('');
+    setOtpLoading(true);
+    try {
+      const { error: otpErr } = await verifyOtp(user!.email!, otpValue);
+      if (otpErr) {
+        if (otpErr.message?.includes('expired')) {
+          throw new Error('OTP has expired. Please go back and request a new one.');
+        }
+        throw otpErr;
+      }
+
+      if (otpAction === 'end') {
+        const { error: updErr } = await supabase
+          .from('elections')
+          .update({ end_date: new Date().toISOString(), status: 'completed' })
+          .eq('id', detailsModalElection.id);
+        if (updErr) throw updErr;
+      } else if (otpAction === 'extend') {
+        const { error: updErr } = await supabase
+          .from('elections')
+          .update({ end_date: new Date(newEndDate).toISOString() })
+          .eq('id', detailsModalElection.id);
+        if (updErr) throw updErr;
+      }
+
+      const { data: updatedElection } = await supabase
+        .from('elections')
+        .select('*')
+        .eq('id', detailsModalElection.id)
+        .single();
+        
+      if (updatedElection) {
+        setDetailsModalElection(updatedElection);
+      }
+      
+      setOtpAction(null);
+      setShowOtpInput(false);
+      setOtpValue('');
+      await fetchDashboardData();
+    } catch (err: any) {
+      setOtpError(err.message || 'Invalid OTP. Action failed.');
+    } finally {
+      setOtpLoading(false);
+    }
+  };
 
   const fetchDashboardData = async () => {
     try {
@@ -491,7 +605,7 @@ const AdminDashboard = () => {
                       <p className="text-center py-12 text-muted-foreground text-sm">No elections found. Create one using the Launch Wizard.</p>
                     ) : (
                       elections.map(el => (
-                        <div key={el.id} className="p-6 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between">
+                        <div key={el.id} className="p-6 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-between cursor-pointer hover:bg-white/10 transition-colors" onClick={() => handleViewDetails(el)}>
                           <div>
                             <h4 className="text-sm font-bold">{el.name}</h4>
                             <p className="text-[10px] text-muted-foreground font-mono">{el.id}</p>
@@ -504,7 +618,7 @@ const AdminDashboard = () => {
                                   'bg-white/5 text-muted-foreground'
                             )}>{el.status}</span>
                             <button
-                              onClick={() => setShareModalElection(el)}
+                              onClick={(e) => { e.stopPropagation(); setShareModalElection(el); }}
                               className="p-2 bg-white/5 hover:bg-white/10 rounded-lg border border-white/10 text-muted-foreground hover:text-white transition-colors"
                               title="Share Election"
                             >
@@ -868,6 +982,196 @@ const AdminDashboard = () => {
                       </table>
                     )}
                   </div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          {/* Election Details Modal */}
+          <AnimatePresence>
+            {detailsModalElection && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+              >
+                <motion.div
+                  initial={{ scale: 0.95, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  exit={{ scale: 0.95, opacity: 0 }}
+                  className="bg-slate-900 border border-white/10 rounded-[24px] p-6 max-w-lg w-full shadow-2xl relative flex flex-col max-h-[90vh] overflow-y-auto custom-scrollbar"
+                >
+                  <button
+                    onClick={() => { setDetailsModalElection(null); setShowOtpInput(false); setOtpError(''); }}
+                    className="absolute top-4 right-4 text-muted-foreground hover:text-white transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="w-10 h-10 bg-primary/20 rounded-xl flex items-center justify-center">
+                      <Calendar className="text-primary" size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Election Details</h3>
+                      <p className="text-xs text-muted-foreground">{detailsModalElection.name}</p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 mb-6">
+                    <div className="bg-black/50 p-4 rounded-xl border border-white/5 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Status</span>
+                        <span className={clsx("text-[10px] font-bold px-3 py-1 rounded-full uppercase",
+                          detailsModalElection.status === 'active' ? 'bg-green-500/10 text-green-400' :
+                            detailsModalElection.status === 'upcoming' ? 'bg-blue-500/10 text-blue-400' :
+                              'bg-white/5 text-muted-foreground'
+                        )}>{detailsModalElection.status}</span>
+                      </div>
+                      
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Start Date</span>
+                        <span className="text-sm font-medium">{new Date(detailsModalElection.start_date).toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">End Date</span>
+                        <span className="text-sm font-medium">{new Date(detailsModalElection.end_date).toLocaleString()}</span>
+                      </div>
+                      
+                      {detailsModalElection.status !== 'completed' && detailsModalElection.status !== 'ended' ? (
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Time Left</span>
+                          <span className="text-sm font-bold text-primary">
+                            {new Date(detailsModalElection.end_date).getTime() > new Date().getTime() 
+                              ? Math.ceil((new Date(detailsModalElection.end_date).getTime() - new Date().getTime()) / (1000 * 60 * 60)) + ' hours'
+                              : 'Ending soon'}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="bg-black/50 p-4 rounded-xl border border-white/5 space-y-3">
+                      {detailsModalElection.status === 'completed' || detailsModalElection.status === 'ended' ? (
+                        <>
+                          <div className="flex items-center gap-2 mb-2">
+                            <Trophy size={16} className="text-yellow-400" />
+                            <span className="text-sm font-bold text-white">Election Results</span>
+                          </div>
+                          {detailsCandidates.length > 0 ? (
+                            <>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Winner</span>
+                                <span className="text-sm font-bold text-yellow-400">{detailsCandidates[0].name}</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Votes Received</span>
+                                <span className="text-sm font-medium">{detailsCandidates[0].vote_count}</span>
+                              </div>
+                              {detailsCandidates.length > 1 && (
+                                <div className="flex justify-between items-center">
+                                  <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Majority By</span>
+                                  <span className="text-sm font-medium text-green-400">{(detailsCandidates[0].vote_count - detailsCandidates[1].vote_count)} votes</span>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No candidates or votes recorded.</p>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 mb-2">
+                            <Trophy size={16} className="text-blue-400" />
+                            <span className="text-sm font-bold text-white">Current Leader</span>
+                          </div>
+                          {detailsCandidates.length > 0 && detailsCandidates[0].vote_count > 0 ? (
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm font-bold text-blue-400">{detailsCandidates[0].name}</span>
+                              <span className="text-sm font-medium">{detailsCandidates[0].vote_count} votes</span>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No votes cast yet.</p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {!showOtpInput ? (
+                    <div className="grid grid-cols-2 gap-4 mt-6">
+                      <button
+                        onClick={() => handleInitiateOtpAction('extend')}
+                        disabled={detailsModalElection.status === 'completed' || detailsModalElection.status === 'ended'}
+                        className="bg-white/5 hover:bg-white/10 text-white font-bold py-3 rounded-xl border border-white/10 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Extend Duration
+                      </button>
+                      <button
+                        onClick={() => handleInitiateOtpAction('end')}
+                        disabled={detailsModalElection.status === 'completed' || detailsModalElection.status === 'ended'}
+                        className="bg-red-500/20 hover:bg-red-500/30 text-red-400 font-bold py-3 rounded-xl border border-red-500/30 transition-all text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        End Election
+                      </button>
+                      
+                      {otpError && (
+                        <div className="col-span-2 text-xs text-red-400 text-center mt-2">{otpError}</div>
+                      )}
+                      
+                      {/* Date picker for extend */}
+                      {otpAction === 'extend' && (
+                         <div className="col-span-2 mt-2">
+                           <label className="text-xs text-muted-foreground mb-1 block">Select New End Date</label>
+                           <input 
+                             type="datetime-local" 
+                             value={newEndDate}
+                             onChange={(e) => setNewEndDate(e.target.value)}
+                             className="w-full bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary text-white"
+                           />
+                         </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="bg-black/50 p-6 rounded-xl border border-white/10 mt-2 space-y-4 text-center">
+                      <div className="w-12 h-12 bg-primary/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                        <Lock className="text-primary" size={20} />
+                      </div>
+                      <h4 className="text-sm font-bold text-white">Admin Authentication</h4>
+                      <p className="text-xs text-muted-foreground">OTP sent to your email. Please enter it below to confirm {otpAction === 'end' ? 'ending the election' : 'extending the duration'}.</p>
+                      
+                      <div className="relative max-w-[200px] mx-auto">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                          <Key size={14} className="text-muted-foreground" />
+                        </div>
+                        <input 
+                          type="text" 
+                          maxLength={6} 
+                          value={otpValue} 
+                          onChange={(e) => setOtpValue(e.target.value.replace(/\D/g, ''))} 
+                          className="w-full bg-black/80 border border-white/20 rounded-xl py-3 pl-10 pr-3 text-center tracking-widest focus:outline-none focus:border-primary transition-colors text-white font-mono" 
+                          placeholder="------" 
+                        />
+                      </div>
+
+                      {otpError && <p className="text-xs text-red-400">{otpError}</p>}
+
+                      <div className="flex gap-2 justify-center mt-4">
+                        <button 
+                          onClick={() => { setShowOtpInput(false); setOtpError(''); }} 
+                          className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white rounded-xl text-xs font-bold transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button 
+                          onClick={handleConfirmOtpAction}
+                          disabled={otpValue.length !== 6 || otpLoading}
+                          className="px-6 py-2 bg-primary hover:bg-primary/90 text-white rounded-xl text-xs font-bold transition-all disabled:opacity-50 flex items-center gap-2"
+                        >
+                          {otpLoading ? <Loader2 size={14} className="animate-spin" /> : 'Confirm'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </motion.div>
               </motion.div>
             )}

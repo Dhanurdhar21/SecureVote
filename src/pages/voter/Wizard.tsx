@@ -78,6 +78,15 @@ const VoterWizard = () => {
     try {
       await syncElectionStatuses();
 
+      // ── Step 0: Validate election time locally ──
+      const nowMs = new Date().getTime();
+      const endMs = new Date(election.end_date).getTime();
+      if (nowMs > endMs) {
+        setError(`This election has ended. Sorry, election ended.`);
+        setLoading(false);
+        return;
+      }
+
       // ── Step 1: Validate network ──
       const networkOk = await validateNetwork();
       if (!networkOk) {
