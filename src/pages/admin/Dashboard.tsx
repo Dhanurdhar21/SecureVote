@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard,
@@ -33,7 +33,7 @@ import { useAuth } from '../../context/AuthContext';
 import { clsx } from 'clsx';
 import { CreateElectionWizard } from './CreateElectionWizard';
 import { syncElectionStatuses } from '../../lib/electionSync';
-import { createElectionOnChain } from '../../lib/blockchain/blockchainService';
+import { createElectionOnChain, getElectionOnChain, electionIdToBytes32, registerCandidateOnChain, activateElectionOnChain } from '../../lib/blockchain/blockchainService';
 import { validateNetwork } from '../../lib/blockchain/contract';
 const AdminDashboard = () => {
   const { user, profile, signOut, linkNotification, dismissLinkNotification, signInWithOtp, verifyOtp } = useAuth();
@@ -69,6 +69,7 @@ const AdminDashboard = () => {
   const [loadingAudit, setLoadingAudit] = useState(false);
   const EXPLORER_URL = import.meta.env.VITE_BLOCK_EXPLORER_URL || 'https://sepolia.etherscan.io';
   const [isDeploying, setIsDeploying] = useState(false);
+  const isDeployingRef = useRef(false);
 
   const [stats, setStats] = useState({
     totalRegistered: 0,
@@ -316,19 +317,53 @@ const AdminDashboard = () => {
 
   const handleDeployOnChain = async () => {
     if (!selectedElection) return;
+    if (isDeployingRef.current) {
+      console.warn("[BLOCKCHAIN] Deployment already in progress");
+      return;
+    }
+    
+    isDeployingRef.current = true;
     try {
+      console.log('[DEPLOY FLOW] START');
+      console.log('[DEPLOY FLOW] SOURCE: Dashboard');
+      console.log('[DEPLOY FLOW] ELECTION ID:', selectedElection.id);
+      console.log('[DEPLOY FLOW] DEPLOYMENT LOCK:', isDeployingRef.current);
+      console.log('[DEPLOY FLOW] PRECHECK START');
+
       setIsDeploying(true);
       const networkOk = await validateNetwork();
+      console.log('[DEPLOY FLOW] PRECHECK RESULT:', networkOk ? 'PASS' : 'FAIL');
       if (!networkOk) {
         alert('Please switch to Sepolia testnet in MetaMask to deploy on blockchain.');
+        isDeployingRef.current = false;
         return;
       }
+
+      try {
+        await getElectionOnChain(selectedElection.id);
+        alert('Election already deployed and synchronized.');
+        const { error } = await supabase
+          .from('elections')
+          .update({
+            is_on_chain: true,
+            contract_election_id: electionIdToBytes32(selectedElection.id),
+          })
+          .eq('id', selectedElection.id);
+        if (error) throw error;
+        fetchDashboardData();
+        return;
+      } catch (err) {
+        // Expected if not deployed
+      }
+
+      console.log("[BLOCKCHAIN] Requesting MetaMask");
+
       const bcResult = await createElectionOnChain(
         selectedElection.id,
         selectedElection.name,
         new Date(selectedElection.start_date),
         new Date(selectedElection.end_date),
-        candidates.length
+        candidates.map(c => c.name)
       );
       const { error } = await supabase
         .from('elections')
@@ -341,9 +376,14 @@ const AdminDashboard = () => {
       fetchDashboardData();
     } catch (err: any) {
       console.error('Error deploying on chain:', err);
-      alert(err.message || 'Failed to deploy on chain');
+      if (err.code === 4001 || err.code === 'ACTION_REJECTED' || (err.message && err.message.includes('user rejected'))) {
+        alert('Blockchain deployment was cancelled in MetaMask.');
+      } else {
+        alert(err.message || 'Failed to deploy on chain');
+      }
     } finally {
       setIsDeploying(false);
+      isDeployingRef.current = false;
     }
   };
 

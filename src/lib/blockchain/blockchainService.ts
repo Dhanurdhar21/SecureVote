@@ -107,7 +107,7 @@ export async function createElectionOnChain(
   name: string,
   startTime: Date,
   endTime: Date,
-  candidateCount: number
+  candidateNames: string[]
 ): Promise<BlockchainElectionResult> {
   await ensureCorrectNetwork();
 
@@ -115,21 +115,39 @@ export async function createElectionOnChain(
   const electionBytes32 = electionIdToBytes32(electionId);
   const startUnix = Math.floor(startTime.getTime() / 1000);
   const endUnix = Math.floor(endTime.getTime() / 1000);
+  const candidateCount = candidateNames.length;
+  
+  const args = [electionBytes32, name, startUnix, endUnix, candidateNames];
+
+  console.log("[BLOCKCHAIN] Function:", "createElection");
+  console.log("[BLOCKCHAIN] Arguments:", args);
+  console.log("[BLOCKCHAIN] Argument types:", args.map(a => typeof a));
+  console.log("[BLOCKCHAIN] Candidates:", candidateNames);
+  console.log("[BLOCKCHAIN] Candidate names:", candidateNames);
+  console.log("[BLOCKCHAIN] Candidate IDs:", candidateNames.map((_, i) => i));
+  console.log("[BLOCKCHAIN] Candidate count:", candidateNames.length);
+  console.log("[BLOCKCHAIN] Election ID:", electionId);
 
   try {
+    console.log("[DEPLOY FLOW] REQUESTING METAMASK");
     const tx = await contract.createElection(
       electionBytes32,
       name,
       startUnix,
       endUnix,
-      candidateCount
+      candidateNames
     );
+    console.log("[DEPLOY FLOW] METAMASK REQUESTED");
+    console.log("[DEPLOY FLOW] TRANSACTION HASH:", tx.hash);
+    console.log("[DEPLOY FLOW] WAITING FOR RECEIPT");
 
     const receipt = await tx.wait(1); // Wait for 1 block confirmation
+    console.log("[DEPLOY FLOW] RECEIPT:", receipt?.hash || tx.hash);
+    console.log("[DEPLOY FLOW] DEPLOYMENT SUCCESS");
 
     return {
-      transactionHash: receipt.hash,
-      blockNumber: receipt.blockNumber,
+      transactionHash: receipt?.hash || tx.hash,
+      blockNumber: receipt?.blockNumber || 0,
       contractElectionId: electionBytes32,
     };
   } catch (error: any) {
@@ -345,6 +363,10 @@ export async function getElectionOnChain(
 }> {
   const contract = getReadOnlyContract();
   const electionBytes32 = electionIdToBytes32(electionId);
+
+  console.log("[BLOCKCHAIN] Function:", "getElection");
+  console.log("[BLOCKCHAIN] Arguments:", [electionBytes32]);
+  console.log("[BLOCKCHAIN] Argument types:", [typeof electionBytes32]);
 
   const result = await contract.getElection(electionBytes32);
 

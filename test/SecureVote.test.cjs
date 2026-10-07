@@ -13,25 +13,25 @@ describe("SecureVote", function () {
     const now = Math.floor(Date.now() / 1000);
     const startTime = now - 3600; // Started 1 hour ago
     const endTime = now + 86400;  // Ends in 24 hours
-    const candidateCount = 3;
+    const candidateNames = ["Candidate 0", "Candidate 1", "Candidate 2"];
 
-    return { secureVote, owner, voter1, voter2, voter3, nonVoter, electionId, startTime, endTime, candidateCount };
+    return { secureVote, owner, voter1, voter2, voter3, nonVoter, electionId, startTime, endTime, candidateNames };
   }
 
   describe("Election Creation", function () {
     it("Should create an election", async function () {
-      const { secureVote, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await expect(secureVote.createElection(electionId, "Student Council 2025", startTime, endTime, candidateCount))
+      await expect(secureVote.createElection(electionId, "Student Council 2025", startTime, endTime, candidateNames))
         .to.emit(secureVote, "ElectionCreated")
-        .withArgs(electionId, "Student Council 2025", startTime, endTime, candidateCount);
+        .withArgs(electionId, "Student Council 2025", startTime, endTime, candidateNames.length);
     });
 
     it("Should reject duplicate election IDs", async function () {
-      const { secureVote, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "First Election", startTime, endTime, candidateCount);
-      await expect(secureVote.createElection(electionId, "Duplicate", startTime, endTime, candidateCount))
+      await secureVote.createElection(electionId, "First Election", startTime, endTime, candidateNames);
+      await expect(secureVote.createElection(electionId, "Duplicate", startTime, endTime, candidateNames))
         .to.be.revertedWithCustomError(secureVote, "ElectionAlreadyExists");
     });
 
@@ -39,31 +39,31 @@ describe("SecureVote", function () {
       const { secureVote, electionId } = await loadFixture(deploySecureVoteFixture);
       const now = Math.floor(Date.now() / 1000);
 
-      await expect(secureVote.createElection(electionId, "Bad Time", now + 100, now + 50, 2))
+      await expect(secureVote.createElection(electionId, "Bad Time", now + 100, now + 50, ["A", "B"]))
         .to.be.revertedWithCustomError(secureVote, "InvalidTimeRange");
     });
 
     it("Should reject zero candidate count", async function () {
       const { secureVote, electionId, startTime, endTime } = await loadFixture(deploySecureVoteFixture);
 
-      await expect(secureVote.createElection(electionId, "No Candidates", startTime, endTime, 0))
+      await expect(secureVote.createElection(electionId, "No Candidates", startTime, endTime, []))
         .to.be.revertedWithCustomError(secureVote, "InvalidCandidateCount");
     });
 
     it("Should allow any user to create elections", async function () {
-      const { secureVote, voter1, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await expect(secureVote.connect(voter1).createElection(electionId, "Authorized", startTime, endTime, candidateCount))
+      await expect(secureVote.connect(voter1).createElection(electionId, "Authorized", startTime, endTime, candidateNames))
         .to.emit(secureVote, "ElectionCreated")
-        .withArgs(electionId, "Authorized", startTime, endTime, candidateCount);
+        .withArgs(electionId, "Authorized", startTime, endTime, candidateNames.length);
     });
   });
 
   describe("Voter Authorization", function () {
     it("Should authorize voters", async function () {
-      const { secureVote, voter1, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
 
       await expect(secureVote.authorizeVoter(electionId, voter1.address))
         .to.emit(secureVote, "VoterAuthorized")
@@ -73,9 +73,9 @@ describe("SecureVote", function () {
     });
 
     it("Should batch authorize voters", async function () {
-      const { secureVote, voter1, voter2, voter3, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, voter2, voter3, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
       await secureVote.authorizeVotersBatch(electionId, [voter1.address, voter2.address, voter3.address]);
 
       expect(await secureVote.isVoterAuthorized(electionId, voter1.address)).to.be.true;
@@ -86,13 +86,9 @@ describe("SecureVote", function () {
 
   describe("Voting", function () {
     it("Should cast a vote successfully (any wallet, no on-chain auth required)", async function () {
-      const { secureVote, voter1, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
-      for(let i=0; i<candidateCount; i++) {
-        await secureVote.registerCandidate(electionId, `Candidate ${i}`);
-      }
-      await secureVote.activateElection(electionId);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
       // No authorizeVoter call — voter authorization is handled off-chain via Supabase
 
       const voteHash = ethers.id("test-vote-hash");
@@ -107,13 +103,9 @@ describe("SecureVote", function () {
     });
 
     it("Should prevent double voting", async function () {
-      const { secureVote, voter1, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
-      for(let i=0; i<candidateCount; i++) {
-        await secureVote.registerCandidate(electionId, `Candidate ${i}`);
-      }
-      await secureVote.activateElection(electionId);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
       await secureVote.authorizeVoter(electionId, voter1.address);
 
       const voteHash = ethers.id("vote1");
@@ -124,13 +116,9 @@ describe("SecureVote", function () {
     });
 
     it("Should allow any wallet to vote without on-chain authorization", async function () {
-      const { secureVote, nonVoter, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, nonVoter, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
-      for(let i=0; i<candidateCount; i++) {
-        await secureVote.registerCandidate(electionId, `Candidate ${i}`);
-      }
-      await secureVote.activateElection(electionId);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
 
       // Should succeed — authorization is handled off-chain
       await expect(secureVote.connect(nonVoter).castVote(electionId, 0, ethers.id("hash")))
@@ -140,13 +128,9 @@ describe("SecureVote", function () {
 
   describe("Election Closure & Results", function () {
     it("Should close an election and return results", async function () {
-      const { secureVote, voter1, voter2, electionId, startTime, endTime, candidateCount } = await loadFixture(deploySecureVoteFixture);
+      const { secureVote, voter1, voter2, electionId, startTime, endTime, candidateNames } = await loadFixture(deploySecureVoteFixture);
 
-      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateCount);
-      for(let i=0; i<candidateCount; i++) {
-        await secureVote.registerCandidate(electionId, `Candidate ${i}`);
-      }
-      await secureVote.activateElection(electionId);
+      await secureVote.createElection(electionId, "Test", startTime, endTime, candidateNames);
       await secureVote.authorizeVotersBatch(electionId, [voter1.address, voter2.address]);
 
       await secureVote.connect(voter1).castVote(electionId, 0, ethers.id("v1"));

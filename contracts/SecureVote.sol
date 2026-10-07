@@ -133,15 +133,16 @@ contract SecureVote is Ownable, ReentrancyGuard, Pausable {
      * @param name Human-readable election name
      * @param startTime Unix timestamp when voting opens
      * @param endTime Unix timestamp when voting closes
-     * @param candidateCount Number of candidates
+     * @param candidateNames Array of candidate names
      */
     function createElection(
         bytes32 electionId,
         string calldata name,
         uint256 startTime,
         uint256 endTime,
-        uint256 candidateCount
+        string[] calldata candidateNames
     ) external whenNotPaused {
+        uint256 candidateCount = candidateNames.length;
         if (elections[electionId].exists) revert ElectionAlreadyExists();
         if (endTime <= startTime) revert InvalidTimeRange();
         if (candidateCount == 0) revert InvalidCandidateCount();
@@ -151,9 +152,9 @@ contract SecureVote is Ownable, ReentrancyGuard, Pausable {
             startTime: startTime,
             endTime: endTime,
             candidateCount: candidateCount,
-            registeredCandidates: 0,
+            registeredCandidates: candidateCount,
             exists: true,
-            isActive: false,
+            isActive: true, // Auto-activate
             closed: false,
             totalVotes: 0
         });
@@ -161,6 +162,12 @@ contract SecureVote is Ownable, ReentrancyGuard, Pausable {
         electionOwners[electionId] = msg.sender;
 
         emit ElectionCreated(electionId, name, startTime, endTime, candidateCount);
+        
+        for (uint256 i = 0; i < candidateCount; i++) {
+            emit CandidateRegistered(electionId, candidateNames[i]);
+        }
+        
+        emit ElectionActivated(electionId);
     }
 
     /**

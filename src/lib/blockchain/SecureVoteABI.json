@@ -426,9 +426,9 @@
         "type": "uint256"
       },
       {
-        "internalType": "uint256",
-        "name": "candidateCount",
-        "type": "uint256"
+        "internalType": "string[]",
+        "name": "candidateNames",
+        "type": "string[]"
       }
     ],
     "name": "createElection",
